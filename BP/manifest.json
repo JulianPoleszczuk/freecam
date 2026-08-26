@@ -1,0 +1,22 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "Freecam & Speed",
+    "description": "V1: free cam toggle + speed control",
+    "uuid": "e072a539-d502-4540-95b5-ac87d69bab38",
+    "version": [1, 0, 0],
+    "min_engine_version": [1, 21, 80]
+  },
+  "modules": [
+    {
+      "type": "script",
+      "language": "javascript",
+      "uuid": "d9a1d7c4-60b1-4ef7-a450-f3947df54f2d",
+      "version": [1, 0, 0],
+      "entry": "scripts/main.js"
+    }
+  ],
+  "dependencies": [
+    { "module_name": "@minecraft/server", "version": "2.9.0" }
+  ]
+}

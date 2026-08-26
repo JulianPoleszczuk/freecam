@@ -1,0 +1,5 @@
+node_modules/
+dist/
+BP/scripts/main.js
+*.mcpack
+*.mcaddon

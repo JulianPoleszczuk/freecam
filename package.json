@@ -1,0 +1,16 @@
+{
+  "name": "freecam-speed-addon",
+  "version": "1.0.0",
+  "description": "Minecraft Bedrock behavior pack: free cam toggle + speed control (V1)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.js",
+    "watch": "node esbuild.config.js --watch"
+  },
+  "devDependencies": {
+    "@minecraft/server": "2.9.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.2"
+  }
+}
