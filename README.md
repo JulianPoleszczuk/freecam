@@ -54,11 +54,12 @@ Enabling free cam (`/freecam:freecam`):
    and integrates a camera position of its own, which is pushed back to
    `setCamera`. WASD flies along the camera's view direction, Jump/Sneak fly
    up/down, and looking up/down while moving forward also changes altitude.
-5. Movement uses the same acceleration-and-drag model as vanilla creative and
-   spectator flight (`velocity = velocity * 0.9 + input * 0.045`), so the
-   camera eases in and coasts to a stop rather than snapping between full
-   speed and standstill. Terminal speed is ~9 blocks/s at `/freecam:speed
-   100`, capped at 50 blocks/s however high the percent goes.
+5. Movement uses an acceleration-and-drag model
+   (`velocity = velocity * 0.65 + input * 0.21`), so the camera eases in and
+   coasts to a stop rather than snapping between full speed and standstill.
+   Top speed is 12 blocks/s at `/freecam:speed 100` - reached to ~87% within
+   a quarter second - and is capped at 50 blocks/s however high the percent
+   goes.
 6. The whole `Movement` input category is disabled for the body, so it cannot
    walk, jump or sneak at all. A drift check runs twice a second purely as a
    safety net against outside shoves (knockback, an explosion, a piston).
@@ -206,8 +207,10 @@ the camera position is the main remaining source of hitching. Flying slower
   player as dynamic properties and restored on their next join (camera
   cleared, input permissions restored, teleported back). Dying while in free
   cam ends free cam without teleporting - you keep your respawn point.
-- Strafing uses the raw lateral axis of `getMovementVector()`. If a future
-  game build mirrors that axis, flip `STRAFE_SIGN` in `src/freecam.ts`.
+- Mojang does not document which way either axis of `getMovementVector()`
+  points. The lateral axis turned out to be positive-is-left, so
+  `STRAFE_SIGN` in `src/freecam.ts` is `-1`; `FORWARD_SIGN` sits next to it
+  for the same reason, should a build ever flip the other axis.
 - Looking around carries roughly one to two ticks of latency that spectator
   does not have. The camera rotation has to make a server round trip before
   it can be handed back to `setCamera`, whereas spectator turns client-side.

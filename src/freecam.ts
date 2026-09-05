@@ -38,15 +38,19 @@ export const MAX_BLOCK_REACH = 32;
 export const DEFAULT_BLOCK_REACH = 8;
 
 /**
- * Camera flight uses the same acceleration-and-drag model vanilla creative /
- * spectator flying does, so the camera eases in and coasts out instead of
- * snapping to full speed the moment a key goes down.
+ * Camera flight uses an acceleration-and-drag model, so the camera eases in
+ * and coasts out instead of snapping between full speed and standstill.
  *
- * Terminal speed is ACCELERATION / (1 - DRAG), i.e. 0.45 blocks per tick
- * (9 blocks/s) at 100%, which matches spectator closely.
+ * Terminal speed is ACCELERATION / (1 - DRAG) = 0.6 blocks per tick
+ * (12 blocks/s) at 100%, in the same range as vanilla creative flight.
+ *
+ * DRAG also sets how long the ramp takes, and that matters more than the top
+ * speed does: at drag 0.9 the camera needed over a second to wind up and sat
+ * at a third of its speed after 5 ticks, which felt like slow motion. At 0.65
+ * it is at ~87% after 5 ticks (a quarter second) and still smooth.
  */
-const MOVE_ACCELERATION = 0.045;
-const MOVE_DRAG = 0.9;
+const MOVE_ACCELERATION = 0.21;
+const MOVE_DRAG = 0.65;
 /** Below this the camera is treated as stopped, so it settles instead of creeping. */
 const MOVE_EPSILON = 0.002;
 /** Ceiling on terminal speed regardless of the speed percent, in blocks/tick. */
@@ -61,10 +65,13 @@ const MAX_TERMINAL_SPEED = 2.5;
 const CAMERA_EASE_SECONDS = 0.05;
 
 /**
- * Sign applied to the lateral component of InputInfo.getMovementVector().
- * Flip to -1 if strafing ever ends up mirrored on a future game build.
+ * Signs applied to the two axes of InputInfo.getMovementVector(). Mojang does
+ * not document which way either axis points, and the lateral one turned out to
+ * be positive-is-left, so strafing came out mirrored. Both are constants so
+ * either axis can be corrected on its own if a game build changes convention.
  */
-const STRAFE_SIGN = 1;
+const STRAFE_SIGN = -1;
+const FORWARD_SIGN = 1;
 
 /** How far the body may drift from its origin before we snap it back. */
 const BODY_DRIFT_TOLERANCE = 0.25;
@@ -431,9 +438,12 @@ function moveCamera(session: FreecamSession): void {
   const forward = directionFromRotation(session.cameraRotation);
   const right = rightFromYaw(session.cameraRotation.y);
 
-  let ix = forward.x * movement.y + right.x * movement.x * STRAFE_SIGN;
-  let iy = forward.y * movement.y;
-  let iz = forward.z * movement.y + right.z * movement.x * STRAFE_SIGN;
+  const ahead = movement.y * FORWARD_SIGN;
+  const sideways = movement.x * STRAFE_SIGN;
+
+  let ix = forward.x * ahead + right.x * sideways;
+  let iy = forward.y * ahead;
+  let iz = forward.z * ahead + right.z * sideways;
 
   const planar = Math.hypot(ix, iy, iz);
   if (planar > 1) {
