@@ -2,9 +2,9 @@
   "format_version": 2,
   "header": {
     "name": "Freecam & Speed",
-    "description": "V1: free cam toggle + speed control",
+    "description": "V2: detached free cam (body stays put) + block reach + speed control",
     "uuid": "e072a539-d502-4540-95b5-ac87d69bab38",
-    "version": [1, 0, 0],
+    "version": [2, 0, 0],
     "min_engine_version": [1, 21, 80]
   },
   "modules": [
