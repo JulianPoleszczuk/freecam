@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "build": "node esbuild.config.js",
-    "watch": "node esbuild.config.js --watch"
+    "watch": "node esbuild.config.js --watch",
+    "install-pack": "node tools/install-pack.mjs",
+    "deploy": "npm run build && npm run install-pack"
   },
   "devDependencies": {
     "@minecraft/server": "2.9.0",

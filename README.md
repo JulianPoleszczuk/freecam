@@ -133,18 +133,30 @@ watch` during development to rebuild on save.
 
 ## Installing into Minecraft
 
-Copy (or symlink) the `BP` folder into your `com.mojang`
-`development_behavior_packs` directory, renaming it to something
-identifiable (e.g. `FreecamSpeed`).
-
-On Windows, for the Microsoft Store release of Minecraft, that's typically:
-
 ```
-%LOCALAPPDATA%\Packages\Microsoft.MinecraftUWP_8wekyb3d8bbwe\LocalState\games\com.mojang\development_behavior_packs\
+npm run deploy
 ```
 
-(For the Preview build, replace `Microsoft.MinecraftUWP_8wekyb3d8bbwe` with
-`Microsoft.MinecraftWindowsBeta_8wekyb3d8bbwe`.)
+Builds the pack and copies `BP/` into every Bedrock
+`development_behavior_packs` folder that exists on the machine, as
+`FreecamSpeed`. Use this rather than copying by hand - **Windows has more
+than one Bedrock data folder**, and installing into the wrong one leaves the
+game quietly running an older build of the script:
+
+| Build | Data folder |
+| --- | --- |
+| Native build from the unified Minecraft Launcher | `%APPDATA%\Minecraft Bedrock\Users\Shared\games\com.mojang\` (worlds live per-account under `Users\<id>\`) |
+| Microsoft Store / UWP release | `%LOCALAPPDATA%\Packages\Microsoft.MinecraftUWP_8wekyb3d8bbwe\LocalState\games\com.mojang\` |
+| Preview | same as UWP with `Microsoft.MinecraftWindowsBeta_8wekyb3d8bbwe` |
+
+If a pack seems not to update, check which of those folders holds a
+`development_behavior_packs\FreecamSpeed\manifest.json` and what `version`
+it reports. A quick in-game check: `/freecam:reach` only exists from V2
+onwards, so if the game does not know that command it is running an old
+script.
+
+Note that a behavior pack is only reloaded when the world is loaded - leave
+the world and re-enter it (or restart the game) after deploying.
 
 Then, in-game:
 
