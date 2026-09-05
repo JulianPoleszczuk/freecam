@@ -90,6 +90,8 @@ const CAMERA_MAX_Y = 512;
 
 /** Ticks between action bar refreshes while free cam is active. */
 const HUD_INTERVAL_TICKS = 20;
+/** Sampling window for /freecam:debug, in ticks (one second). */
+const DEBUG_WINDOW_TICKS = 20;
 
 /**
  * Input categories switched off for the body while free cam runs. The whole
@@ -115,6 +117,24 @@ export interface OriginState {
   dimensionId: string;
 }
 
+/**
+ * Counters behind /freecam:debug. The point is to tell apart the two things
+ * that both feel like "the view lags":
+ *
+ * - `runs` below the window length means the script itself is not getting
+ *   every tick, so every camera update is late.
+ * - `rotationTicks` well below `runs` means the client is only reporting a new
+ *   head rotation a few times a second while a camera preset is active. That
+ *   would cap how smooth the view can ever be, and no script change fixes it.
+ */
+interface DebugCounters {
+  windowStartTick: number;
+  runs: number;
+  rotationTicks: number;
+  cameraSends: number;
+  degreesTurned: number;
+}
+
 interface FreecamSession {
   player: Player;
   origin: OriginState;
@@ -127,6 +147,24 @@ interface FreecamSession {
   sentRotation: Vector2;
   lastBreakTick: number;
   lastUseTick: number;
+  debug: DebugCounters;
+}
+
+function newDebugCounters(tick: number): DebugCounters {
+  return { windowStartTick: tick, runs: 0, rotationTicks: 0, cameraSends: 0, degreesTurned: 0 };
+}
+
+/** Players who asked for the diagnostic read-out via /freecam:debug. */
+const debugPlayers = new Set<string>();
+
+export function toggleFreecamDebug(playerId: string): boolean {
+  if (debugPlayers.has(playerId)) {
+    debugPlayers.delete(playerId);
+    return false;
+  }
+
+  debugPlayers.add(playerId);
+  return true;
 }
 
 const sessions = new Map<string, FreecamSession>();
@@ -248,6 +286,7 @@ export function startFreecam(player: Player): OriginState {
     sentRotation: copyVector2(rotation),
     lastBreakTick: Number.NEGATIVE_INFINITY,
     lastUseTick: Number.NEGATIVE_INFINITY,
+    debug: newDebugCounters(system.currentTick),
   };
 
   sessions.set(player.id, session);
@@ -412,6 +451,7 @@ function applyCamera(session: FreecamSession, force = false): void {
 
   session.sentLocation = copyVector3(location);
   session.sentRotation = copyVector2(rotation);
+  session.debug.cameraSends += 1;
 }
 
 function readVerticalInput(player: Player): number {
@@ -513,6 +553,22 @@ function updateHud(session: FreecamSession): void {
   session.player.onScreenDisplay.setActionBar("§b● Free cam");
 }
 
+/**
+ * Reports one window of counters and starts the next. `runs` and
+ * `rotationTicks` are the numbers that matter; see DebugCounters.
+ */
+function reportDebug(session: FreecamSession, tick: number): void {
+  const debug = session.debug;
+  const elapsed = tick - debug.windowStartTick;
+
+  session.player.onScreenDisplay.setActionBar(
+    `§7run §f${debug.runs}§7/${elapsed}  rot §f${debug.rotationTicks}§7/${elapsed}  ` +
+      `cam §f${debug.cameraSends}§7  turn §f${debug.degreesTurned.toFixed(0)}°`
+  );
+
+  session.debug = newDebugCounters(tick);
+}
+
 system.runInterval(() => {
   if (sessions.size === 0) {
     return;
@@ -527,7 +583,18 @@ system.runInterval(() => {
     }
 
     try {
-      session.cameraRotation = copyVector2(session.player.getRotation());
+      const debug = session.debug;
+      debug.runs += 1;
+
+      const previous = session.cameraRotation;
+      const rotation = session.player.getRotation();
+      const turned = Math.abs(rotation.x - previous.x) + Math.abs(rotation.y - previous.y);
+      if (turned > 0) {
+        debug.rotationTicks += 1;
+        debug.degreesTurned += turned;
+      }
+
+      session.cameraRotation = copyVector2(rotation);
       moveCamera(session);
       applyCamera(session);
 
@@ -537,7 +604,13 @@ system.runInterval(() => {
         keepBodyAtOrigin(session);
       }
 
-      if (tick % HUD_INTERVAL_TICKS === 0) {
+      if (tick - debug.windowStartTick >= DEBUG_WINDOW_TICKS) {
+        if (debugPlayers.has(playerId)) {
+          reportDebug(session, tick);
+        } else {
+          session.debug = newDebugCounters(tick);
+        }
+      } else if (!debugPlayers.has(playerId) && tick % HUD_INTERVAL_TICKS === 0) {
         updateHud(session);
       }
     } catch {
@@ -778,4 +851,5 @@ world.afterEvents.playerLeave.subscribe((event) => {
   sessions.delete(event.playerId);
   blockReachByPlayer.delete(event.playerId);
   cameraSpeedPercentByPlayer.delete(event.playerId);
+  debugPlayers.delete(event.playerId);
 });

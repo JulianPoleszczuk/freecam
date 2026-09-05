@@ -20,6 +20,7 @@ import {
   setCameraSpeedPercent,
   startFreecam,
   stopFreecam,
+  toggleFreecamDebug,
 } from "./freecam";
 
 /**
@@ -183,6 +184,31 @@ system.beforeEvents.startup.subscribe(({ customCommandRegistry }) => {
       return {
         status: CustomCommandStatus.Success,
         message: `Free cam block reach set to ${reach} block${reach === 1 ? "" : "s"}.`,
+      };
+    }
+  );
+
+  customCommandRegistry.registerCommand(
+    {
+      name: "freecam:debug",
+      description: "Toggle the free cam diagnostic read-out on the action bar.",
+      permissionLevel: CommandPermissionLevel.Any,
+      cheatsRequired: false,
+    },
+    (origin) => {
+      const player = getCommandPlayer(origin);
+      if (!player) {
+        return { status: CustomCommandStatus.Failure, message: "This command can only be run by a player." };
+      }
+
+      const enabled = toggleFreecamDebug(player.id);
+      return {
+        status: CustomCommandStatus.Success,
+        message: enabled
+          ? "Free cam debug on. Reads: run = script ticks per second (want 20), " +
+            "rot = ticks the game reported a new head rotation (want ~20 while turning), " +
+            "cam = camera updates sent, turn = degrees turned."
+          : "Free cam debug off.",
       };
     }
   );
