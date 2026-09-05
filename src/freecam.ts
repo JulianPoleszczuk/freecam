@@ -57,12 +57,17 @@ const MOVE_EPSILON = 0.002;
 const MAX_TERMINAL_SPEED = 2.5;
 
 /**
- * Length of the client-side interpolation between two camera updates. The
- * script can only move the camera once per tick (0.05s); easing across exactly
- * that window lets the client draw the in-between frames, which is what turns
- * the 20 Hz stepping into smooth motion.
+ * Client-side interpolation between two camera updates, in seconds. Zero
+ * disables easing entirely, which is the right default here.
+ *
+ * Easing looked like the obvious way to smooth the 20 Hz camera stepping, but
+ * setCamera eases the *whole* transform - rotation included - and a fresh ease
+ * is started every tick before the previous one has finished. The result is
+ * exponential smoothing with a long tail on the view direction: looking around
+ * lags behind the mouse and reads as slow motion. Position judder is by far
+ * the lesser evil, so nothing is eased.
  */
-const CAMERA_EASE_SECONDS = 0.05;
+const CAMERA_EASE_SECONDS = 0;
 
 /**
  * Signs applied to the two axes of InputInfo.getMovementVector(). Mojang does
@@ -400,7 +405,9 @@ function applyCamera(session: FreecamSession, force = false): void {
   session.player.camera.setCamera(FREE_CAMERA_PRESET, {
     location,
     rotation,
-    easeOptions: { easeTime: CAMERA_EASE_SECONDS, easeType: EasingType.Linear },
+    ...(CAMERA_EASE_SECONDS > 0
+      ? { easeOptions: { easeTime: CAMERA_EASE_SECONDS, easeType: EasingType.Linear } }
+      : {}),
   });
 
   session.sentLocation = copyVector3(location);

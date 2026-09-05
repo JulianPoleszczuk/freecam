@@ -179,9 +179,11 @@ that cheap:
 
 - `setCamera` is skipped entirely when neither the camera position nor the
   rotation changed since the last tick, so hovering costs nothing.
-- Each update eases linearly over exactly one tick (0.05s). Without this the
-  view steps at 20 Hz while the game renders far faster, which reads as
-  stutter even when the frame rate is fine.
+- Nothing is eased. `setCamera` eases the whole transform, rotation included,
+  and a fresh ease starts every tick before the previous one finishes, so
+  easing turns the view direction into exponential smoothing with a long tail
+  - looking around then lags the mouse badly. Position judder at 20 Hz is the
+  lesser evil. `CAMERA_EASE_SECONDS` in `src/freecam.ts` re-enables it.
 - The body is held still by input permissions instead of by a teleport every
   tick, and the action bar no longer runs a block raycast on a timer.
 
@@ -211,11 +213,11 @@ the camera position is the main remaining source of hitching. Flying slower
   points. The lateral axis turned out to be positive-is-left, so
   `STRAFE_SIGN` in `src/freecam.ts` is `-1`; `FORWARD_SIGN` sits next to it
   for the same reason, should a build ever flip the other axis.
-- Looking around carries roughly one to two ticks of latency that spectator
-  does not have. The camera rotation has to make a server round trip before
-  it can be handed back to `setCamera`, whereas spectator turns client-side.
-  Lowering `CAMERA_EASE_SECONDS` to `0` trades the smoothing for a slightly
-  more direct feel.
+- Looking around carries roughly two ticks (~100 ms) of latency that
+  spectator does not have, and no setting removes it: the mouse turns the
+  body, that rotation reaches the script a tick later, and `setCamera` needs
+  another tick to reach the client. Spectator turns client-side, so it is
+  instant. This is the floor for any script-driven camera.
 
 ## Testing checklist
 
