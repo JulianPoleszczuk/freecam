@@ -6,6 +6,7 @@ import {
   BlockRaycastHit,
   ButtonState,
   Direction,
+  EasingType,
   EntityComponentTypes,
   EntityEquippableComponent,
   EntityInventoryComponent,
@@ -36,10 +37,28 @@ export const MIN_BLOCK_REACH = 1;
 export const MAX_BLOCK_REACH = 32;
 export const DEFAULT_BLOCK_REACH = 8;
 
-/** Camera travel speed, in blocks per tick, at 100% speed. */
-const BASE_CAMERA_SPEED = 0.45;
-/** Hard cap so a 1000% speed setting stays controllable (and chunk-safe). */
-const MAX_CAMERA_SPEED = 4;
+/**
+ * Camera flight uses the same acceleration-and-drag model vanilla creative /
+ * spectator flying does, so the camera eases in and coasts out instead of
+ * snapping to full speed the moment a key goes down.
+ *
+ * Terminal speed is ACCELERATION / (1 - DRAG), i.e. 0.45 blocks per tick
+ * (9 blocks/s) at 100%, which matches spectator closely.
+ */
+const MOVE_ACCELERATION = 0.045;
+const MOVE_DRAG = 0.9;
+/** Below this the camera is treated as stopped, so it settles instead of creeping. */
+const MOVE_EPSILON = 0.002;
+/** Ceiling on terminal speed regardless of the speed percent, in blocks/tick. */
+const MAX_TERMINAL_SPEED = 2.5;
+
+/**
+ * Length of the client-side interpolation between two camera updates. The
+ * script can only move the camera once per tick (0.05s); easing across exactly
+ * that window lets the client draw the in-between frames, which is what turns
+ * the 20 Hz stepping into smooth motion.
+ */
+const CAMERA_EASE_SECONDS = 0.05;
 
 /**
  * Sign applied to the lateral component of InputInfo.getMovementVector().
@@ -48,7 +67,9 @@ const MAX_CAMERA_SPEED = 4;
 const STRAFE_SIGN = 1;
 
 /** How far the body may drift from its origin before we snap it back. */
-const BODY_DRIFT_TOLERANCE = 0.05;
+const BODY_DRIFT_TOLERANCE = 0.25;
+/** The body is frozen by input permissions; this is just a periodic safety net. */
+const BODY_CHECK_INTERVAL_TICKS = 10;
 /** Minimum ticks between two camera-driven block actions. */
 const ACTION_COOLDOWN_TICKS = 4;
 
@@ -56,18 +77,16 @@ const CAMERA_MIN_Y = -128;
 const CAMERA_MAX_Y = 512;
 
 /** Ticks between action bar refreshes while free cam is active. */
-const HUD_INTERVAL_TICKS = 4;
+const HUD_INTERVAL_TICKS = 20;
 
 /**
- * Input categories switched off for the body while free cam runs. Jump and
- * Sneak stay enabled on purpose: they are read back through inputInfo to fly
- * the camera up and down, and any residual body motion they cause is undone
- * by the per-tick snap-back in keepBodyAtOrigin().
+ * Input categories switched off for the body while free cam runs. The whole
+ * Movement category goes, jumping and sneaking included: leaving those enabled
+ * meant every tap made the body hop, which then had to be undone by a teleport
+ * every single tick. InputInfo still reports the raw button states, so the
+ * camera can be flown up and down regardless.
  */
-const FROZEN_INPUT_CATEGORIES = [
-  InputPermissionCategory.LateralMovement,
-  InputPermissionCategory.Mount,
-];
+const FROZEN_INPUT_CATEGORIES = [InputPermissionCategory.Movement];
 
 /** Dynamic properties, so a disconnect mid-freecam can still be undone. */
 const DP_ACTIVE = "freecam:active";
@@ -89,6 +108,11 @@ interface FreecamSession {
   origin: OriginState;
   cameraLocation: Vector3;
   cameraRotation: Vector2;
+  /** Carried between ticks so the camera has spectator-like inertia. */
+  velocity: Vector3;
+  /** What was last handed to setCamera, so identical updates can be skipped. */
+  sentLocation: Vector3;
+  sentRotation: Vector2;
   lastBreakTick: number;
   lastUseTick: number;
 }
@@ -168,9 +192,11 @@ export function setCameraSpeedPercent(playerId: string, percent: number): void {
   cameraSpeedPercentByPlayer.set(playerId, percent);
 }
 
-function cameraSpeedFor(player: Player): number {
+/** Acceleration for this player, capped so terminal speed stays sane. */
+function accelerationFor(player: Player): number {
   const percent = cameraSpeedPercentByPlayer.get(player.id) ?? 100;
-  return Math.min(MAX_CAMERA_SPEED, BASE_CAMERA_SPEED * (percent / 100));
+  const maxAcceleration = MAX_TERMINAL_SPEED * (1 - MOVE_DRAG);
+  return Math.min(maxAcceleration, MOVE_ACCELERATION * (percent / 100));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -199,11 +225,15 @@ export function startFreecam(player: Player): OriginState {
     dimensionId: player.dimension.id,
   };
 
+  const head = player.getHeadLocation();
   const session: FreecamSession = {
     player,
     origin,
-    cameraLocation: copyVector3(player.getHeadLocation()),
+    cameraLocation: copyVector3(head),
     cameraRotation: copyVector2(rotation),
+    velocity: { x: 0, y: 0, z: 0 },
+    sentLocation: copyVector3(head),
+    sentRotation: copyVector2(rotation),
     lastBreakTick: Number.NEGATIVE_INFINITY,
     lastUseTick: Number.NEGATIVE_INFINITY,
   };
@@ -211,7 +241,9 @@ export function startFreecam(player: Player): OriginState {
   sessions.set(player.id, session);
   persistOrigin(player, origin);
   freezeBody(player);
-  applyCamera(session);
+  // Forced: the "already sent" snapshot starts equal to the initial pose, so
+  // the skip-if-unchanged guard would otherwise swallow the very first update.
+  applyCamera(session, true);
   return origin;
 }
 
@@ -338,11 +370,34 @@ function readPersistedOrigin(player: Player): OriginState | undefined {
 /* per-tick camera update                                                      */
 /* -------------------------------------------------------------------------- */
 
-function applyCamera(session: FreecamSession): void {
+/**
+ * Pushes the camera to the client, easing across one tick so the motion is
+ * interpolated instead of stepping at 20 Hz. Identical updates are skipped
+ * entirely: a player who is holding still costs no camera traffic at all.
+ */
+function applyCamera(session: FreecamSession, force = false): void {
+  const location = session.cameraLocation;
+  const rotation = session.cameraRotation;
+
+  if (
+    !force &&
+    location.x === session.sentLocation.x &&
+    location.y === session.sentLocation.y &&
+    location.z === session.sentLocation.z &&
+    rotation.x === session.sentRotation.x &&
+    rotation.y === session.sentRotation.y
+  ) {
+    return;
+  }
+
   session.player.camera.setCamera(FREE_CAMERA_PRESET, {
-    location: session.cameraLocation,
-    rotation: session.cameraRotation,
+    location,
+    rotation,
+    easeOptions: { easeTime: CAMERA_EASE_SECONDS, easeType: EasingType.Linear },
   });
+
+  session.sentLocation = copyVector3(location);
+  session.sentRotation = copyVector2(rotation);
 }
 
 function readVerticalInput(player: Player): number {
@@ -360,6 +415,14 @@ function readVerticalInput(player: Player): number {
   return vertical;
 }
 
+/**
+ * Advances the camera one tick using vanilla-style flight physics: the input
+ * direction feeds an acceleration, the previous velocity decays by a constant
+ * drag, and the sum carries the camera. Vertical input is added on top of the
+ * normalised look-direction movement rather than being folded into it, so
+ * rising while flying forward does not slow the forward travel - the same way
+ * spectator behaves.
+ */
 function moveCamera(session: FreecamSession): void {
   const player = session.player;
   const movement = player.inputInfo.getMovementVector();
@@ -368,24 +431,36 @@ function moveCamera(session: FreecamSession): void {
   const forward = directionFromRotation(session.cameraRotation);
   const right = rightFromYaw(session.cameraRotation.y);
 
-  let dx = forward.x * movement.y + right.x * movement.x * STRAFE_SIGN;
-  let dy = forward.y * movement.y + vertical;
-  let dz = forward.z * movement.y + right.z * movement.x * STRAFE_SIGN;
+  let ix = forward.x * movement.y + right.x * movement.x * STRAFE_SIGN;
+  let iy = forward.y * movement.y;
+  let iz = forward.z * movement.y + right.z * movement.x * STRAFE_SIGN;
 
-  const length = Math.hypot(dx, dy, dz);
-  if (length < 1e-4) {
+  const planar = Math.hypot(ix, iy, iz);
+  if (planar > 1) {
+    ix /= planar;
+    iy /= planar;
+    iz /= planar;
+  }
+  iy += vertical;
+
+  const acceleration = accelerationFor(player);
+  const velocity = session.velocity;
+  velocity.x = velocity.x * MOVE_DRAG + ix * acceleration;
+  velocity.y = velocity.y * MOVE_DRAG + iy * acceleration;
+  velocity.z = velocity.z * MOVE_DRAG + iz * acceleration;
+
+  if (Math.abs(velocity.x) < MOVE_EPSILON) velocity.x = 0;
+  if (Math.abs(velocity.y) < MOVE_EPSILON) velocity.y = 0;
+  if (Math.abs(velocity.z) < MOVE_EPSILON) velocity.z = 0;
+
+  if (velocity.x === 0 && velocity.y === 0 && velocity.z === 0) {
     return;
   }
 
-  const speed = cameraSpeedFor(player);
-  dx = (dx / length) * speed;
-  dy = (dy / length) * speed;
-  dz = (dz / length) * speed;
-
   session.cameraLocation = {
-    x: session.cameraLocation.x + dx,
-    y: clamp(session.cameraLocation.y + dy, CAMERA_MIN_Y, CAMERA_MAX_Y),
-    z: session.cameraLocation.z + dz,
+    x: session.cameraLocation.x + velocity.x,
+    y: clamp(session.cameraLocation.y + velocity.y, CAMERA_MIN_Y, CAMERA_MAX_Y),
+    z: session.cameraLocation.z + velocity.z,
   };
 }
 
@@ -412,16 +487,13 @@ function keepBodyAtOrigin(session: FreecamSession): void {
   }
 }
 
+/**
+ * Deliberately just a reminder that free cam is on - no coordinates, block ids
+ * or reach numbers. The action bar sits under the crosshair while you fly, so
+ * anything more than this is clutter.
+ */
 function updateHud(session: FreecamSession): void {
-  const player = session.player;
-  const camera = session.cameraLocation;
-  const hit = raycastFromCamera(session);
-  const target = hit ? hit.block.typeId.replace("minecraft:", "") : "-";
-
-  player.onScreenDisplay.setActionBar(
-    `§bFree cam§r §7|§r §f${camera.x.toFixed(1)} ${camera.y.toFixed(1)} ${camera.z.toFixed(1)}§r ` +
-      `§7|§r reach §f${getBlockReach(player)}§r §7|§r §f${target}`
-  );
+  session.player.onScreenDisplay.setActionBar("§b● Free cam");
 }
 
 system.runInterval(() => {
@@ -441,7 +513,13 @@ system.runInterval(() => {
       session.cameraRotation = copyVector2(session.player.getRotation());
       moveCamera(session);
       applyCamera(session);
-      keepBodyAtOrigin(session);
+
+      // The body is held in place by input permissions, so this only has to
+      // catch the rare outside shove (knockback, explosion, a piston).
+      if (tick % BODY_CHECK_INTERVAL_TICKS === 0) {
+        keepBodyAtOrigin(session);
+      }
+
       if (tick % HUD_INTERVAL_TICKS === 0) {
         updateHud(session);
       }

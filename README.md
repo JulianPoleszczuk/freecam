@@ -52,12 +52,16 @@ Enabling free cam (`/freecam:freecam`):
 4. Every tick the script reads the player's raw input
    (`Player.inputInfo.getMovementVector()` plus the Jump/Sneak button states)
    and integrates a camera position of its own, which is pushed back to
-   `setCamera`. WASD flies horizontally along the camera's view direction,
-   Jump/Sneak fly up/down, and looking up/down while moving forward also
-   changes altitude.
-5. Lateral movement input is disabled for the body, and as a belt-and-braces
-   measure the body is snapped back to its origin every tick if anything
-   (knockback, a jump, an explosion) nudges it.
+   `setCamera`. WASD flies along the camera's view direction, Jump/Sneak fly
+   up/down, and looking up/down while moving forward also changes altitude.
+5. Movement uses the same acceleration-and-drag model as vanilla creative and
+   spectator flight (`velocity = velocity * 0.9 + input * 0.045`), so the
+   camera eases in and coasts to a stop rather than snapping between full
+   speed and standstill. Terminal speed is ~9 blocks/s at `/freecam:speed
+   100`, capped at 50 blocks/s however high the percent goes.
+6. The whole `Movement` input category is disabled for the body, so it cannot
+   walk, jump or sneak at all. A drift check runs twice a second purely as a
+   safety net against outside shoves (knockback, an explosion, a piston).
 
 Disabling free cam:
 
@@ -87,8 +91,9 @@ from the camera:
 
 The raycast is limited by the configured block reach
 (`/freecam:reach`, 1-32, default 8), so `getBlockFromRay` never returns a
-target further away than the setting allows. An action bar shows the camera
-coordinates, the current reach, and the block currently targeted.
+target further away than the setting allows. The action bar shows a plain
+`● Free cam` reminder and nothing else - coordinates, block ids and reach
+numbers sit right under the crosshair while you fly, so they are left out.
 
 Adventure and Spectator gamemodes are excluded from camera editing, and
 interacting with entities is suppressed while free cam is on.
@@ -166,6 +171,24 @@ Then, in-game:
 4. Load the world and run `/freecam:freecam`, `/freecam:reach 16` or
    `/freecam:speed 250`.
 
+## Performance notes
+
+The camera is server-driven, so every update is a packet. Three things keep
+that cheap:
+
+- `setCamera` is skipped entirely when neither the camera position nor the
+  rotation changed since the last tick, so hovering costs nothing.
+- Each update eases linearly over exactly one tick (0.05s). Without this the
+  view steps at 20 Hz while the game renders far faster, which reads as
+  stutter even when the frame rate is fine.
+- The body is held still by input permissions instead of by a teleport every
+  tick, and the action bar no longer runs a block raycast on a timer.
+
+What the script cannot fix is chunk loading: the camera can fly far past the
+chunks the server keeps loaded around your body, and terrain streaming in at
+the camera position is the main remaining source of hitching. Flying slower
+(`/freecam:speed 50`) or staying nearer the body avoids it.
+
 ## Known limitations (V2)
 
 - Placement resolves the held item's id straight to a block permutation, so
@@ -185,6 +208,11 @@ Then, in-game:
   cam ends free cam without teleporting - you keep your respawn point.
 - Strafing uses the raw lateral axis of `getMovementVector()`. If a future
   game build mirrors that axis, flip `STRAFE_SIGN` in `src/freecam.ts`.
+- Looking around carries roughly one to two ticks of latency that spectator
+  does not have. The camera rotation has to make a server round trip before
+  it can be handed back to `setCamera`, whereas spectator turns client-side.
+  Lowering `CAMERA_EASE_SECONDS` to `0` trades the smoothing for a slightly
+  more direct feel.
 
 ## Testing checklist
 
