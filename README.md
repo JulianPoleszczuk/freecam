@@ -1,13 +1,21 @@
-# Freecam & Speed (V1)
+# Freecam & Speed (V2)
 
 A minimal Minecraft Bedrock Edition **behavior pack** (no resource pack, no
-forms, no icon) built with the `@minecraft/server` Script API. V1 ships two
-features:
+forms, no icon) built with the `@minecraft/server` Script API.
 
-- **Free cam** - toggles you into Spectator mode (real noclip flying with a
-  detached camera) and back to whatever gamemode you were in before.
-- **Speed adjustment** - set your movement speed anywhere from 1% to 1000%
-  of the vanilla default (`0.1`).
+- **Free cam** - detaches the *camera* only. Your real player keeps standing
+  exactly where you switched it on, stays visible in the world, and gets
+  teleported back to that exact spot (X/Y/Z, yaw, pitch, dimension) when you
+  switch free cam off. The camera flies independently of the body.
+- **Block interaction from the camera** - breaking, placing and opening
+  doors/trapdoors/fence gates keep working while free cam is active. The
+  action is applied to whatever the *camera* is aiming at, not to whatever is
+  in front of the frozen body.
+- **Block reach** - configurable from **1 to 32** blocks (values above 32 are
+  rejected).
+- **Speed adjustment** - set your movement speed anywhere from 1% to 1000% of
+  the vanilla default (`0.1`). The same percent also scales how fast the free
+  cam flies.
 
 ## Important: command syntax differs from a typical "chat command" addon
 
@@ -19,16 +27,71 @@ from the API in favor of the newer **Custom Commands** API
 real slash commands:
 
 - `/freecam:freecam` - toggle free cam on/off.
-- `/freecam:speed <percent>` - set movement speed, `1`-`1000` (percent of
-  default). `/freecam:speed 100` resets to vanilla default.
+- `/freecam:speed <percent>` - set movement + camera speed, `1`-`1000`
+  (percent of default). `/freecam:speed 100` resets to vanilla default.
+- `/freecam:reach <blocks>` - set the free cam block interaction reach,
+  `1`-`32`. Defaults to `8` and is remembered per player.
 
-Both commands are registered with `permissionLevel: Any` and
-`cheatsRequired: false`, so any player can run them without needing
-operator status or cheats enabled - the closest match to the original
-"any player can type a quick command" intent.
+All commands are registered with `permissionLevel: Any` and
+`cheatsRequired: false`, so any player can run them without needing operator
+status or cheats enabled.
 
-Feedback for both commands is returned as the command's own result message
-(shown in chat), not via `sendMessage`/forms.
+Feedback is returned as the command's own result message (shown in chat), not
+via forms.
+
+## How free cam works
+
+Enabling free cam (`/freecam:freecam`):
+
+1. The player's **origin** is snapshotted: X, Y, Z, yaw, pitch and dimension
+   id.
+2. The gamemode is left completely alone - **no Spectator switching**. The
+   body stays in the world at the origin and remains visible to everyone.
+3. The camera is detached with the vanilla `minecraft:free` camera preset via
+   `player.camera.setCamera(...)`, starting at the player's head.
+4. Every tick the script reads the player's raw input
+   (`Player.inputInfo.getMovementVector()` plus the Jump/Sneak button states)
+   and integrates a camera position of its own, which is pushed back to
+   `setCamera`. WASD flies horizontally along the camera's view direction,
+   Jump/Sneak fly up/down, and looking up/down while moving forward also
+   changes altitude.
+5. Lateral movement input is disabled for the body, and as a belt-and-braces
+   measure the body is snapped back to its origin every tick if anything
+   (knockback, a jump, an explosion) nudges it.
+
+Disabling free cam:
+
+1. The camera is cleared (`player.camera.clear()`).
+2. Input permissions are restored.
+3. The player is teleported back to the **exact** saved position, rotation
+   and dimension - never to wherever the camera happened to be parked.
+
+```
+Free cam on:   player = (100, 64, 100)
+Camera flies:  (250, 80, -50)
+Free cam off:  player = (100, 64, 100)   <- not (250, 80, -50)
+```
+
+## Block interaction while free cam is active
+
+The client still raycasts from the body, so the pack intercepts the vanilla
+interaction events, **cancels** them (so the frozen body never grief-mines
+its own surroundings) and replays the action against a script-side raycast
+from the camera:
+
+| Input | Event hooked | What happens |
+| --- | --- | --- |
+| Left click | `beforeEvents.playerBreakBlock` | Breaks the block the camera is aiming at (within reach). Creative removes it outright; Survival uses `setblock ... destroy` so you get the normal drops, particles and sound. |
+| Right click on a block | `beforeEvents.playerInteractWithBlock` | Opens/closes the targeted door, trapdoor or fence gate; otherwise places the held block against the targeted face. |
+| Right click at nothing | `beforeEvents.itemUse` | Same as above - this is the path used when the body happens to be aiming at open sky. |
+
+The raycast is limited by the configured block reach
+(`/freecam:reach`, 1-32, default 8), so `getBlockFromRay` never returns a
+target further away than the setting allows. An action bar shows the camera
+coordinates, the current reach, and the block currently targeted.
+
+Adventure and Spectator gamemodes are excluded from camera editing, and
+interacting with entities is suppressed while free cam is on.
 
 ## Requirements
 
@@ -44,9 +107,10 @@ Feedback for both commands is returned as the command's own result message
 ```
 BP/
   manifest.json         behavior pack manifest
-  scripts/main.js        compiled output (gitignored, built from src/)
+  scripts/main.js       compiled output (gitignored, built from src/)
 src/
-  main.ts                TypeScript source
+  main.ts               command registration + speed control
+  freecam.ts            detached camera, body freezing, camera-based interaction
 package.json
 tsconfig.json
 esbuild.config.js
@@ -87,31 +151,48 @@ Then, in-game:
 1. Create a new world (or edit an existing one).
 2. Under **Experiments**, enable **Beta APIs**.
 3. Under **Behavior Packs**, activate the pack.
-4. Load the world and run `/freecam:freecam` or `/freecam:speed 250`.
+4. Load the world and run `/freecam:freecam`, `/freecam:reach 16` or
+   `/freecam:speed 250`.
 
-## Known limitations (V1)
+## Known limitations (V2)
 
-- Speed and free-cam state are kept in memory only - they are **not**
-  reapplied automatically if a player disconnects and rejoins, or respawns.
-  `/freecam:speed 100` is always a safe way to reset to vanilla default.
-- Free cam is implemented via Spectator mode toggling, not a true detached
-  camera with the player's body left in place. A future version could use
-  the `minecraft:free` camera preset (`player.camera.setCamera(...)`)
-  combined with per-tick `player.inputInfo` reads to move the camera while
-  keeping the body stationary - see the comment in `src/main.ts` for the
-  extension point.
-- If a player disconnects while in free cam, their pre-freecam gamemode
-  entry is cleaned up on `playerLeave`; there's no persistence across
-  sessions.
+- Placement resolves the held item's id straight to a block permutation, so
+  items whose block id differs from the item id (redstone dust, string,
+  buckets, seeds, beds in some cases) will not place. Ordinary blocks do.
+- Scripted "interaction" covers blocks that expose the `open_bit` state -
+  doors, trapdoors, fence gates. Chests, furnaces, crafting tables and
+  redstone components cannot be opened from script, so those still need you
+  to leave free cam.
+- Tool durability is not consumed when breaking from the camera.
+- Movement speed is kept in memory only and is **not** reapplied after a
+  disconnect or respawn. `/freecam:speed 100` is always a safe reset. Block
+  reach *is* persisted per player via a dynamic property.
+- If a player disconnects while in free cam, the origin is stored on the
+  player as dynamic properties and restored on their next join (camera
+  cleared, input permissions restored, teleported back). Dying while in free
+  cam ends free cam without teleporting - you keep your respawn point.
+- Strafing uses the raw lateral axis of `getMovementVector()`. If a future
+  game build mirrors that axis, flip `STRAFE_SIGN` in `src/freecam.ts`.
 
 ## Testing checklist
 
 - Load the world with the pack active and Beta APIs on - no errors should
   appear in the content log.
-- `/freecam:freecam` toggles you into spectator and back, restoring your
-  original gamemode each time.
-- `/freecam:speed 50`, `/freecam:speed 100`, `/freecam:speed 1000` all
-  apply proportional speed changes.
+- `/freecam:freecam` detaches the camera. Your own body stays visible at the
+  spot you were standing on, and your gamemode is unchanged.
+- WASD flies the camera; Jump/Sneak move it up/down; the body does not move.
+- Fly the camera 100+ blocks away, then `/freecam:freecam` again - you are
+  teleported back to the exact coordinates and rotation from step 2.
+- `/freecam:reach 1`, `5`, `16`, `32` all apply; `/freecam:reach 0`,
+  `/freecam:reach 33` and `/freecam:reach abc` fail with a clear message and
+  no content log errors.
+- With reach `16`, aim the camera at a block ~10 blocks away and left click:
+  that block breaks (not one next to your body). Aim at one ~20 blocks away:
+  nothing breaks.
+- Right click with a block in hand places it against the camera's target
+  face; in Survival the stack shrinks by one.
+- `/freecam:speed 50`, `/freecam:speed 100`, `/freecam:speed 1000` all apply
+  proportional changes to walking and to free cam fly speed.
 - `/freecam:speed 0`, `/freecam:speed 1001`, `/freecam:speed abc`, and
   `/freecam:speed` (no argument) all fail with a clear error message and no
   content log errors.
